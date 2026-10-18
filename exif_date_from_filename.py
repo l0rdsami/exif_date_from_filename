@@ -21,6 +21,41 @@ assert PROCESSED_TAG_INDEX not in piexif.ExifIFD.__dict__.values()
 piexif.TAGS["Exif"][PROCESSED_TAG_INDEX] = {"name": "ExifDateFromFilename", "type":piexif.TYPES.Undefined}
 PROCESSED_TAG_NON_VARIABLE = "exif_date_from_filename"
 PROCESSED_TAG = f"{PROCESSED_TAG_NON_VARIABLE}_v{VERSION}"
+EXIF_DATE_TAG_CANDIDATES = (
+    ("Exif", piexif.ExifIFD.DateTimeOriginal, "DateTimeOriginal"),
+    ("Exif", piexif.ExifIFD.DateTimeDigitized, "DateTimeDigitized"),
+    ("0th", piexif.ImageIFD.DateTime, "DateTime"),
+)
+
+
+def _parse_exif_datetime(raw_value):
+    if not raw_value:
+        return None
+    if isinstance(raw_value, bytes):
+        raw_value = raw_value.decode("utf-8", errors="ignore")
+    if not isinstance(raw_value, str):
+        return None
+    raw_value = raw_value.strip().strip("\x00")
+    if not raw_value:
+        return None
+    try:
+        return datetime.strptime(raw_value, "%Y:%m:%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _find_existing_image_date(exif_dict: dict, image_path: Path):
+    for ifd_name, tag_id, tag_name in EXIF_DATE_TAG_CANDIDATES:
+        raw_value = exif_dict[ifd_name].get(tag_id)
+        if raw_value is None:
+            continue
+        parsed = _parse_exif_datetime(raw_value)
+        if parsed:
+            return parsed, tag_name
+        _LOGGER.debug(
+            f"Could not parse existing EXIF {tag_name} for {image_path}: {raw_value}"
+        )
+    return None, None
 
 
 class Parser:
@@ -113,15 +148,7 @@ def update_exif_date(parsers: List[Parser], image_path: Path, dry_run: bool = Fa
             _LOGGER.debug(f"No existing EXIF data in {image_path}. Creating new EXIF data.")
             exif_dict = {"0th": {}, "1st": {}, "Exif": {}, "GPS": {}, "Interop": {}}
 
-        existing_date_taken_raw = exif_dict["Exif"].get(piexif.ExifIFD.DateTimeOriginal)
-        existing_date_taken = None
-        if existing_date_taken_raw:
-            if isinstance(existing_date_taken_raw, bytes):
-                existing_date_taken_raw = existing_date_taken_raw.decode("utf-8", errors="ignore")
-            try:
-                existing_date_taken = datetime.strptime(existing_date_taken_raw, "%Y:%m:%d %H:%M:%S")
-            except ValueError:
-                _LOGGER.debug(f"Could not parse existing EXIF DateTimeOriginal for {image_path}: {existing_date_taken_raw}")
+        existing_date_taken, existing_date_tag = _find_existing_image_date(exif_dict, image_path)
 
         processed_by_us = exif_dict["Exif"].get(PROCESSED_TAG_INDEX, b"").decode("ascii", errors="ignore").startswith(PROCESSED_TAG_NON_VARIABLE)
         can_write = (
@@ -132,9 +159,13 @@ def update_exif_date(parsers: List[Parser], image_path: Path, dry_run: bool = Fa
 
         if existing_date_taken and existing_date_taken.date() == date_taken.date() and not force:
             if dry_run:
-                _LOGGER.info(f"Would skip {image_path} because EXIF date already matches parsed date ({existing_date_taken.date()})")
+                _LOGGER.info(
+                    f"Would skip {image_path} because EXIF {existing_date_tag} already matches parsed date ({existing_date_taken.date()})"
+                )
             else:
-                _LOGGER.info(f"Skipping {image_path} because EXIF date already matches parsed date ({existing_date_taken.date()})")
+                _LOGGER.info(
+                    f"Skipping {image_path} because EXIF {existing_date_tag} already matches parsed date ({existing_date_taken.date()})"
+                )
             return False
 
         if dry_run:
