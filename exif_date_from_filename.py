@@ -101,9 +101,6 @@ def update_exif_date(parsers: List[Parser], image_path: Path, dry_run: bool = Fa
     if not date_taken:
         _LOGGER.debug(f"Could not parse date from filename: {image_path}")
         return False
-    if dry_run:
-        _LOGGER.info(f"Would update EXIF date for {image_path} to {date_taken}")
-        return False
     try:
         # Read the entire image file into memory as raw bytes.
         with open(image_path, 'rb') as f:
@@ -116,11 +113,40 @@ def update_exif_date(parsers: List[Parser], image_path: Path, dry_run: bool = Fa
             _LOGGER.debug(f"No existing EXIF data in {image_path}. Creating new EXIF data.")
             exif_dict = {"0th": {}, "1st": {}, "Exif": {}, "GPS": {}, "Interop": {}}
 
+        existing_date_taken_raw = exif_dict["Exif"].get(piexif.ExifIFD.DateTimeOriginal)
+        existing_date_taken = None
+        if existing_date_taken_raw:
+            if isinstance(existing_date_taken_raw, bytes):
+                existing_date_taken_raw = existing_date_taken_raw.decode("utf-8", errors="ignore")
+            try:
+                existing_date_taken = datetime.strptime(existing_date_taken_raw, "%Y:%m:%d %H:%M:%S")
+            except ValueError:
+                _LOGGER.debug(f"Could not parse existing EXIF DateTimeOriginal for {image_path}: {existing_date_taken_raw}")
+
+        processed_by_us = exif_dict["Exif"].get(PROCESSED_TAG_INDEX, b"").decode("ascii", errors="ignore").startswith(PROCESSED_TAG_NON_VARIABLE)
+        can_write = (
+            piexif.ExifIFD.DateTimeOriginal not in exif_dict["Exif"]
+            or (processed_by_us and update)
+            or force
+        )
+
+        if existing_date_taken and existing_date_taken.date() == date_taken.date() and not force:
+            if dry_run:
+                _LOGGER.info(f"Would skip {image_path} because EXIF date already matches parsed date ({existing_date_taken.date()})")
+            else:
+                _LOGGER.info(f"Skipping {image_path} because EXIF date already matches parsed date ({existing_date_taken.date()})")
+            return False
+
+        if dry_run:
+            if can_write:
+                _LOGGER.info(f"Would update EXIF date for {image_path} to {date_taken}")
+            else:
+                _LOGGER.info(f"Would skip {image_path} because EXIF date is already set and update is not allowed")
+            return False
+
         # Check if DateTimeOriginal tag is already set
         # and was written by us
-        if piexif.ExifIFD.DateTimeOriginal not in exif_dict["Exif"] or (
-           exif_dict["Exif"].get(PROCESSED_TAG_INDEX, b"").decode("ascii").startswith(PROCESSED_TAG_NON_VARIABLE) and update
-        ) or force:
+        if can_write:
             _LOGGER.debug(f"Writing EXIF date for {image_path}")
 
             # Set the DateTimeOriginal tag
