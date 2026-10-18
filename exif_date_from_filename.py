@@ -139,7 +139,7 @@ def update_exif_date(parsers: List[Parser], image_path: Path, dry_run: bool = Fa
 
         if dry_run:
             if can_write:
-                _LOGGER.info(f"Would update EXIF date for {image_path} to {date_taken}")
+                _LOGGER.info(f"Would update EXIF date for {image_path} from {existing_date_taken} to {date_taken}")
             else:
                 _LOGGER.info(f"Would skip {image_path} because EXIF date is already set and update is not allowed")
             return False
